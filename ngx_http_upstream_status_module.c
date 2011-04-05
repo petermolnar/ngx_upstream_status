@@ -35,7 +35,7 @@ static ngx_http_module_t  ngx_http_upstream_status_module_ctx = {
 };
 
 
-static char response_content_type[] = "text/html";
+static char response_content_type[] = "application/json";
 
 ngx_module_t  ngx_http_upstream_status_module = {
     NGX_MODULE_V1,
@@ -141,7 +141,7 @@ ngx_http_upstream_status_writer(ngx_http_upstream_srv_conf_t *uscfp, ngx_http_re
                "service: \"%V\"", &(uscfp->host) );
 
     buf = ngx_create_temp_buf(r->pool, 200 + 2*ngx_strlen(&(uscfp->host)) );
-    buf->last = ngx_sprintf(buf->pos, "<table id=\"%V\" border=\"1\" class=\"vip-group\"><caption>%V</caption>", &(uscfp->host) , &(uscfp->host) );
+    buf->last = ngx_sprintf(buf->pos, "\"%V\":[", &(uscfp->host) );
     *out = append_buf_to_chain(r->pool, *out, buf);
 
     upstream_set = &(uscfp->peer);
@@ -152,29 +152,32 @@ ngx_http_upstream_status_writer(ngx_http_upstream_srv_conf_t *uscfp, ngx_http_re
     ngx_log_error(NGX_LOG_DEBUG, log, 0,
                "is %V upstream: %d", &(uscfp->host), is_upstream_rr);
 
-
     if(is_upstream_rr) {
         upstream_round_robin_set = upstream_set->data;
         for (i = 0; i < upstream_round_robin_set->number; i++) {
-            *out = append_str_to_chain(r->pool, *out, "<tr>");
+            *out = append_str_to_chain(r->pool, *out, "{");
 
             upstream_round_robin_peer = &(upstream_round_robin_set->peer[i]);
             up_down = upstream_round_robin_peer->fails < upstream_round_robin_peer->max_fails;
             ngx_log_error(NGX_LOG_DEBUG, log, 0,
                        "reals: %V %d", &(upstream_round_robin_peer->name), up_down );
 
-            buf = ngx_create_temp_buf(r->pool, 20 + ngx_strlen(&(upstream_round_robin_peer->name)) );
-            buf->last = ngx_sprintf(buf->pos, "<td>%V</td>",  &(upstream_round_robin_peer->name) );
+            buf = ngx_create_temp_buf(r->pool, 100 + ngx_strlen(&(upstream_round_robin_peer->name)) );
+            buf->last = ngx_sprintf(buf->pos, "\"server\":\"%V\",", &(upstream_round_robin_peer->name) );
             *out = append_buf_to_chain(r->pool, *out, buf);
 
             buf = ngx_create_temp_buf(r->pool, 100 );
-            buf->last = ngx_sprintf(buf->pos, "<td class=\"server-%s\">%s</td>", (up_down ? "up" : "down"), (up_down ? "up" : "down") );
+            buf->last = ngx_sprintf(buf->pos, "\"status\":\"%s\"", (up_down ? "up" : "down"));
             *out = append_buf_to_chain(r->pool, *out, buf);
 
-            *out = append_str_to_chain(r->pool, *out, "</tr>");
+            *out = append_str_to_chain(r->pool, *out, "}");
+            if (i != (upstream_round_robin_set->number - 1)) {
+              *out = append_str_to_chain(r->pool, *out, ",");
+            }
+
         }
     }
-    *out = append_str_to_chain(r->pool, *out, "</table>");
+    *out = append_str_to_chain(r->pool, *out, "]");
 }
 
 static ngx_int_t
@@ -190,12 +193,9 @@ ngx_http_upstream_status_handler(ngx_http_request_t *r)
 
     log = r->connection->log;
 
-    out.buf = str_to_buf(r->pool, "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\"\n\
-   \"http://www.w3.org/TR/html4/strict.dtd\">\n");
+    out.buf = str_to_buf(r->pool, "");
     out.next = NULL;
     next = &out;
-
-    next = append_str_to_chain(r->pool, next, "<html><head><title>upstream status</title></head><body>");
 
     if (!(r->method & (NGX_HTTP_GET|NGX_HTTP_HEAD))) {
         return NGX_HTTP_NOT_ALLOWED;
@@ -210,12 +210,17 @@ ngx_http_upstream_status_handler(ngx_http_request_t *r)
     umcf = ngx_http_get_module_main_conf(r, ngx_http_upstream_module);
 
     uscfp = umcf->upstreams.elts;
+    next = append_str_to_chain(r->pool, next, "{");
 
     for (i = 0; i < umcf->upstreams.nelts; i++) {
         ngx_http_upstream_status_writer(uscfp[i], r, &next);
+
+        if (i != (umcf->upstreams.nelts - 1)) {
+          next = append_str_to_chain(r->pool, next, ",");
+        }
     }
 
-    append_str_to_chain(r->pool, next, "</body>");
+    append_str_to_chain(r->pool, next, "}");
 
     r->headers_out.content_type.len = sizeof(response_content_type) - 1;
     r->headers_out.content_type.data = (u_char *) response_content_type;
